@@ -15,11 +15,13 @@ from bson.binary import Binary
 import pickle
 from PIL import Image
 import io
+from flask_cors import CORS
 
 mongodb_pass = 'gobears'
 db_name = 'Main'
 
 app = Flask(__name__)
+CORS(app)
 db_name = "Main"
 DB_URI = "mongodb+srv://s3kim2018:{}@cluster0.nw98u.mongodb.net/{}?retryWrites=true&w=majority".format(mongodb_pass, db_name)
 app.config["MONGODB_HOST"] = DB_URI
@@ -165,10 +167,171 @@ def editmodel():
     else: 
         return make_response("Invalid API-KEY", 401)
 
+@app.route('/appendembeddinglayer', methods = ["POST"])
+def appendembeddinglayer(): 
+    apikey = request.headers.get('apikey')
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    id = str(request.args.get('modelid'))
+    name = str(request.args.get('name'))
+    if 'embedding' not in name:
+        return make_response("Embedding layers must have 'embedding' in its name", 406)
+    if User.objects(apikey = compkey):
+        if Model.objects(apikey = compkey, modelid = id):
+            inputdim = request.args.get('input_dim')
+            outputdim = request.args.get('output_dim')
+            inputlen = request.args.get('input_len')
+            if inputdim.isnumeric() and outputdim.isnumeric() and inputlen.isnumeric():
+                inputdim = int(inputdim); outputdim = int(outputdim)
+            else: 
+                return make_response("Input & Output Dimensions and Input Length must be numbers", 406)
+            mask_zero = str(request.args.get('mask_zero'))
+            val = Model.objects(modelid = id, apikey = compkey).first()
+            loaded_model = tf.keras.models.model_from_json(val.model)
+            if mask_zero == 'false':
+                loaded_model.add(tf.keras.layers.Embedding(inputdim, outputdim, input_length=inputlen, mask_zero = False, name = name))
+                val.model = loaded_model.to_json()
+                val.save()
+                return make_response("Success", 202)
+            elif mask_zero == 'true':
+                loaded_model.add(tf.keras.layers.Embedding(inputdim, outputdim, input_length=inputlen, mask_zero = True, name = name))
+                val.model = loaded_model.to_json()
+                val.save()
+                return make_response("Success", 202)
+            else: 
+                return make_response("Mask Zero must be True or False", 406)
+        else:
+            return make_response("Cannot find model associated with model id: " + str(id), 400)
+    else:
+        return make_response("Invalid API-KEY", 401)
+
 @app.route('/appenddenselayer', methods = ["POST"])
 def appenddenselayer():
     apikey = request.headers.get('apikey') 
-    return make_response("Success", 202)
+    id = str(request.args.get('modelid'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    name = str(request.args.get('name'))
+    if 'dense' not in name: 
+        return make_response("Dense layers must have 'dense' in its name", 406)
+    if User.objects(apikey = compkey):
+        if Model.objects(apikey = compkey, modelid = id):
+            units = request.args.get('units')
+            if units.isnumeric():
+                units = int(units)
+            else: 
+                return make_response("Units Must be of type Integer", 406)
+            act = str(request.args.get('activation'))
+            bias = str(request.args.get('use_bias'))
+            if not (act == 'relu' or act == 'sigmoid' or act == 'softmax' or act == 'softplus' or act == 'softsign' or act == 'tanh' or act == 'selu' or act == 'elu' or act == 'exponential'):
+                return make_response("Invalid Activation Function", 406)
+
+            val = Model.objects(modelid = id, apikey = compkey).first()
+            jsonmodel = val.model
+            loaded_model = tf.keras.models.model_from_json(jsonmodel)
+            if bias == 'false':
+                try:
+                    loaded_model.add(tf.keras.layers.Dense(units, name = name, activation = act, use_bias = False))
+                    updated = loaded_model.to_json()
+                    val.model = updated
+                    val.save()
+                    return make_response("Success", 202)
+                except:
+                    return make_response("Error Appending the layer, check for duplicate names.", 406) 
+            elif bias == 'true':
+                try:
+                    loaded_model.add(tf.keras.layers.Dense(units, name = name, activation = act, use_bias = True))
+                    updated = loaded_model.to_json()
+                    val.model = updated
+                    val.save()
+                    return make_response("Success", 202)
+                except: 
+                    return make_response('Error Appending the layer, check for duplicate names.', 406) 
+
+            else:
+                return make_response("Bias must be true or false", 406)
+        else:
+            return make_response("Cannot find model associated with model id: " + str(id), 400)
+
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/appendflattenlayer', methods = ["POST"])
+def appendflattenlayer():
+    apikey = request.headers.get('apikey') 
+    id = str(request.args.get('modelid'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    name = str(request.args.get('name'))
+    if 'flatten' not in name:
+        return make_response("Flatten layers must have 'flatten' in its name", 406)
+    if User.objects(apikey = compkey):
+        if Model.objects(apikey = compkey, modelid = id):
+            val = Model.objects(modelid = id, apikey = compkey).first()
+            loaded_model = tf.keras.models.model_from_json(val.model)
+            try:
+                loaded_model.add(tf.keras.layers.Flatten())
+                val.model = loaded_model.to_json()
+                val.save()
+                return make_response("Success", 202)
+            except:
+                return make_response('Error Appending the layer, check for duplicate names.', 406) 
+
+        else:
+            return make_response("Cannot find model associated with model id: " + str(id), 400)
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/poplayer', methods = ["DELETE"])
+def poplayer():
+    apikey = request.headers.get('apikey') 
+    id = str(request.args.get('modelid'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest()) 
+    if User.objects(apikey = compkey):
+        if Model.objects(apikey = compkey, modelid = id):
+            val = Model.objects(modelid = id, apikey = compkey).first()
+            jsonmodel = val.model
+            loaded_model = tf.keras.models.model_from_json(jsonmodel)
+            if len(loaded_model.layers) > 0:
+                print(loaded_model.layers)
+                loaded_model.pop()
+                print(loaded_model.layers)
+                val.model = loaded_model.to_json()
+                val.save()
+                return make_response("Success", 202)
+            else: 
+                return make_response("No layers to pop", 406)
+        else:
+            return make_response("Cannot find model associated with model id: " + str(id), 400)
+
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/getlayers', methods = ["GET"])
+def getlayers():
+    apikey = request.headers.get('apikey') 
+    id = str(request.args.get('modelid'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    if User.objects(apikey = compkey):
+        if Model.objects(apikey = compkey, modelid = id):
+            val = Model.objects(modelid = id, apikey = compkey).first()
+            jsonmodel = val.model
+            loaded_model = tf.keras.models.model_from_json(jsonmodel)
+            dic = dict()
+            for layer in loaded_model.layers:
+                print(layer.name)
+                if 'dense' in layer.name:
+                    dic[layer.name] = {'units':layer.units, 'activation':str(layer.activation).split(' ')[1], 'usebias':layer.use_bias}
+                elif 'embedding' in layer.name:
+                    dic[layer.name] = {'input_dim':layer.input_dim, 'output_dim': layer.output_dim, 'input_len': layer.input_length, 'mask_zero': layer.mask_zero}
+                elif 'flatten' in layer.name:
+                    dic[layer.name] = "This is a flatten layer"
+
+            return make_response(jsonify(dic), 200)
+
+        else:
+            return make_response("Cannot find model associated with model id: " + str(id), 400)
+    else: 
+        return make_response("Invalid API-KEY", 401)
+
+
 
 
 @app.route('/deletemodel', methods = ["DELETE"])
