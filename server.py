@@ -5,7 +5,6 @@ import hashlib
 import tensorflow as tf
 from tensorflow import keras 
 import numpy as np 
-import cv2
 import matplotlib.pyplot as plot
 from flask_mongoengine import MongoEngine
 from math import *
