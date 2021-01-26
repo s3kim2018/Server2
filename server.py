@@ -16,6 +16,9 @@ import pickle
 from PIL import Image
 import io
 from flask_cors import CORS
+from PIL import Image, ImageOps
+import urllib
+import uuid
 
 mongodb_pass = 'gobears'
 db_name = 'Main'
@@ -81,6 +84,7 @@ class Data(db.Document):
     datasetid = db.StringField()
     node = db.StringField()
     binarynode = db.FileField()
+    dataid = db.StringField()
     classification = db.StringField()
 
 
@@ -377,6 +381,62 @@ def createdataset():
     else:
         return make_response("Invalid API-KEY", 401)
 
+@app.route('/addfacebookdata', methods = ["PUT"])
+def addfacebookdata():
+    apikey = request.headers.get('apikey')
+    datasetid = str(request.args.get('datasetid'))
+    label = str(request.args.get('label'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    if User.objects(apikey = compkey):
+        if Dataset.objects(apikey = compkey, datasetid = datasetid):
+            val = Dataset.objects(apikey = compkey, datasetid = datasetid).first()
+            if val.datatype != "img":
+                return make_response("This database is not an image database", 406)
+            nw = val.imgw; nh = val.imgh
+            data = request.form['payload']
+            lst = data.split(",")
+            print(lst)
+            for imgurl in lst: 
+                urllib.request.urlretrieve(imgurl, "sample.png")
+                img = Image.open("sample.png")
+                im2 = ImageOps.grayscale(img) 
+                final = im2.resize((int(nw), int(nh)), Image.ANTIALIAS)
+                output = io.BytesIO()
+                final.save(output, format='JPEG')
+                data = Data(apikey = compkey, datasetid = datasetid, dataid = uuid.uuid4().hex, binarynode = output.getvalue(), classification = label)
+                data.save()
+            return make_response("Successfully Saved " + str(len(lst)) + " facebook images!", 201)
+        else:
+            return make_response("Dataset associated with the datasetid not found", 404)
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/addyelpdata', methods = ["PUT"])
+def addyelpdadta():
+    apikey = request.headers.get('apikey')
+    datasetid = str(request.args.get('datasetid'))
+    # label = str(request.args.get('label'))
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    if User.objects(apikey = compkey):
+        if Dataset.objects(apikey = compkey, datasetid = datasetid):
+            val = Dataset.objects(apikey = compkey, datasetid = datasetid).first()
+            if val.datatype != "str":
+                return make_response("This database is not a string database", 406)
+            data = request.form['payload']
+            splitted = data.split(';:;')
+            for split in splitted:
+                key = split[0]
+                val = split[1:len(split)]
+                data = Data(apikey = compkey, datasetid = datasetid, node = val, dataid = uuid.uuid4().hex, classification = key)
+                data.save()
+            return make_response("Successfully Saved " + str(len(splitted)) + " datapoints!", 201)
+        else:
+            return make_response("Dataset associated with the datasetid not found", 404)
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+
+
 @app.route('/adddata', methods = ["PUT"])
 def adddata(): 
     apikey = request.headers.get('apikey')
@@ -391,21 +451,80 @@ def adddata():
                 data = str(request.args.get('data'))
                 if data == 'None' or classif == 'None':
                     return make_response("Data or Classification not found", 404)
-                val = Data(apikey = compkey, datasetid = datasetid, node = data, classification = classif)
+                val = Data(apikey = compkey, datasetid = datasetid, dataid = uuid.uuid4().hex, node = data, classification = classif)
                 return make_response("Success", 201)
             else:
+                nw = val.imgw; nh = val.imgh
                 binary = request.get_data()
-                print(classif)
                 if len(binary) < 3 or classif == 'None':
                     return make_response("Image or Classification not found", 404)
                 else:
-                    val = Data(apikey = compkey, datasetid = datasetid, binarynode = binary, classification = classif)
+                    stream = io.BytesIO(binary)
+                    image = Image.open(stream).convert("RGBA")
+                    im2 = ImageOps.grayscale(image) 
+                    final = im2.resize((int(nw), int(nh)), Image.ANTIALIAS)
+                    output = io.BytesIO()
+                    final.save(output, format='JPEG')
+                    val = Data(apikey = compkey, datasetid = datasetid, binarynode = output.getvalue(), dataid = uuid.uuid4().hex, classification = classif)
                     val.save()
-                # img = Image.open(io.BytesIO(binary))
-                # img_np = np.array(img)
                 return make_response("Success", 201)
         else:
             return make_response("Dataset associated with the datasetid not found", 404)
+    else:
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/getimg/<key>', methods = ["GET"])
+def getimg(key):
+    val = Data.objects(dataid = key).first()
+    return send_file(io.BytesIO(val.binarynode.read()),
+                    attachment_filename='image.png',
+                    mimetype='image/png')
+
+
+
+@app.route('/getalldata', methods = ["GET"])
+def getalldata():
+    apikey = request.headers.get('apikey')
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    datasetid = str(request.args.get('datasetid'))
+    if User.objects(apikey = compkey):
+        ret = []
+        if (Dataset.objects(apikey = compkey, datasetid = datasetid)):
+            val = Dataset.objects(apikey = compkey, datasetid = datasetid).first()
+            if val.datatype == "img": 
+                for obj in Data.objects(apikey=compkey).all():
+                    dic = dict()
+                    dic['img'] = obj.dataid
+                    dic['classification'] = obj.classification
+                    ret.append(dic)
+                return make_response(jsonify(ret), 201)
+
+            elif val.datatype == "str" or val.datatype == "int":
+                for obj in Data.objects(apikey=compkey).all():
+                    dic = dict()
+                    dic['word'] = obj.node
+                    dic['classification'] = obj.classification
+                    ret.append(dic)
+                return make_response(jsonify(ret), 201)
+        else:
+            return make_response("Dataset associated with the datasetid not found", 404)
+
+    else: 
+        return make_response("Invalid API-KEY", 401)
+
+@app.route('/traindata', methods = ["POST"])
+def traindata():
+    apikey = request.headers.get('apikey')
+    compkey = str(hashlib.sha1(apikey.encode('utf-8')).hexdigest())
+    if User.objects(apikey = compkey):
+        modelid = request.args.get('modelid')
+        datasetid = request.args.get('datasetid')
+        epoch = request.args.get('epoch')
+        optimizer = request.args.get('optimizer')
+        loss = request.args.get('loss')
+        for i in range(5000000):
+            print(i)
+        return make_response("Sucessfully Trained!", 401)
     else:
         return make_response("Invalid API-KEY", 401)
 
